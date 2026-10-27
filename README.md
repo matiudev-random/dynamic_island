@@ -6,7 +6,7 @@ Una "isla dinámica" estilo iPhone, pegada al borde superior de la pantalla. Es 
 
 - **Música**: muestra lo que suena (Spotify, YouTube en el navegador, etc.) con la carátula, controles y barra de progreso.
 - **Volumen**: al subir o bajar el volumen se ve en la isla en lugar del cuadro de Windows.
-- **Notificaciones**: WhatsApp, Discord, correo… aparecen en la isla.
+- **Notificaciones**: WhatsApp, Discord, correo… aparecen en la isla con una campanita, y el aviso de Windows de la esquina inferior derecha se esconde para que solo se vean arriba.
 - **Agenda**: los próximos eventos de tus calendarios de Google, con aviso 10 minutos antes.
 - **Monitor del sistema**: CPU, RAM y GPU.
 - **Portapapeles**: lo último que copiaste, para volver a copiarlo con un clic.
@@ -59,12 +59,16 @@ La primera vez, Windows puede pedir permiso para que la isla lea tus notificacio
 
 ## Configuración (se hace a mano, desde la isla)
 
+> Si escuchas **dos sonidos** al llegar una notificación (la campanita y el de Windows), desactiva uno: el de la isla en el menú de abajo, o el de Windows en **Configuración → Sistema → Notificaciones** (desmarca «Reproducir sonido» en las apps que quieras).
+
 Todo se maneja con **clic derecho sobre el ícono de la isla en la bandeja** (junto al reloj; puede estar dentro de la flechita `^`):
 
 | Opción | Para qué sirve |
 |---|---|
 | Ocultar / Mostrar isla | Esconde la isla (el ícono se pone rojo) |
 | Mostrar notificaciones | Activa o desactiva las notificaciones en la isla |
+| Ocultar avisos de Windows | Esconde el aviso de abajo a la derecha (siguen llegando al centro de notificaciones) |
+| Sonido de notificaciones | Activa o desactiva la campanita de la isla |
 | Mostrar portapapeles | Activa o desactiva el aviso al copiar algo |
 | Ocultar volumen de Windows | Usa el volumen de la isla en vez del de Windows |
 | Conectar calendarios… | Agrega tus calendarios de Google (ver abajo) |
@@ -112,6 +116,8 @@ Los calendarios **no vienen en el código**: cada persona agrega los suyos.
   - `MediaService.cs`: música (controles multimedia de Windows).
   - `VolumeService.cs` y `VolumeKeyHook.cs`: volumen.
   - `NotificationService.cs`: notificaciones.
+  - `ToastHider.cs`: esconde el aviso nativo de Windows.
+  - `NotificationSound.cs`: la campanita (generada en código, sin archivos de audio).
   - `CalendarService.cs` y `IcsParser.cs`: calendarios iCal.
   - `SystemMonitor.cs`: CPU, RAM y GPU.
   - `ClipboardWatcher.cs`: portapapeles.

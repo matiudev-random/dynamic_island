@@ -749,6 +749,7 @@ public partial class MainWindow : Window
         if (!IsVisible)
             return;
 
+        NotificationSound.Play();
         if (_pendingNotifications.Count >= MaxPendingNotifications)
             _pendingNotifications.Dequeue();
         _pendingNotifications.Enqueue(info);

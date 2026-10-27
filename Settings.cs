@@ -33,6 +33,24 @@ public static class Settings
         set => WriteBool("HideNativeVolume", (_hideNativeVolume = value).Value);
     }
 
+    private static bool? _hideNativeNotifications;
+
+    /// <summary>Ocultar el aviso de notificación de Windows y verlo solo en la isla (activado por defecto).</summary>
+    public static bool HideNativeNotifications
+    {
+        get => _hideNativeNotifications ??= ReadBool("HideNativeNotifications", true);
+        set => WriteBool("HideNativeNotifications", (_hideNativeNotifications = value).Value);
+    }
+
+    private static bool? _notificationSound;
+
+    /// <summary>Sonar una campanita cuando la isla muestra un aviso (activado por defecto).</summary>
+    public static bool NotificationSound
+    {
+        get => _notificationSound ??= ReadBool("NotificationSound", true);
+        set => WriteBool("NotificationSound", (_notificationSound = value).Value);
+    }
+
     /// <summary>
     /// Enlaces iCal secretos de cada calendario (o rutas a .ics). Vacío = sin calendario.
     /// Migra solo el valor "CalendarUrl" de cuando se admitía un único enlace.

@@ -9,6 +9,7 @@ public partial class App : Application
     private TrayIcon? _tray;
     private MainWindow? _island;
     private VolumeKeyHook? _volumeKeys;
+    private ToastHider? _toastHider;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -24,12 +25,13 @@ public partial class App : Application
         AutoStart.Initialize();
 
         _island = new MainWindow();
-        _island.IsVisibleChanged += (_, _) => UpdateVolumeKeys();
+        _island.IsVisibleChanged += (_, _) => UpdateNativeOverrides();
         _island.Show();
 
         _volumeKeys = new VolumeKeyHook();
         _volumeKeys.Start();
-        UpdateVolumeKeys();
+        _toastHider = new ToastHider();
+        UpdateNativeOverrides();
 
         _tray = new TrayIcon(IconPath(visible: true), "Isla Dinámica", BuildTrayMenu);
         _tray.Clicked += ToggleIsland;
@@ -42,14 +44,24 @@ public partial class App : Application
     private IReadOnlyList<TrayMenuItem> BuildTrayMenu() =>
     [
         new(_island?.UserHidden == true ? "Mostrar isla" : "Ocultar isla", ToggleIsland),
-        new("Mostrar notificaciones", () => Settings.NotificationsEnabled = !Settings.NotificationsEnabled,
-            Settings.NotificationsEnabled),
+        new("Mostrar notificaciones", () =>
+        {
+            Settings.NotificationsEnabled = !Settings.NotificationsEnabled;
+            UpdateNativeOverrides();
+        }, Settings.NotificationsEnabled),
+        new("Ocultar avisos de Windows", () =>
+        {
+            Settings.HideNativeNotifications = !Settings.HideNativeNotifications;
+            UpdateNativeOverrides();
+        }, Settings.HideNativeNotifications),
+        new("Sonido de notificaciones", () => Settings.NotificationSound = !Settings.NotificationSound,
+            Settings.NotificationSound),
         new("Mostrar portapapeles", () => Settings.ClipboardEnabled = !Settings.ClipboardEnabled,
             Settings.ClipboardEnabled),
         new("Ocultar volumen de Windows", () =>
         {
             Settings.HideNativeVolume = !Settings.HideNativeVolume;
-            UpdateVolumeKeys();
+            UpdateNativeOverrides();
         }, Settings.HideNativeVolume),
         new(Settings.CalendarUrls.Length is var n && n > 0 ? $"Calendarios ({n})…" : "Conectar calendarios…", OpenCalendarSetup),
         new("Iniciar con Windows", () => AutoStart.SetEnabled(!AutoStart.IsEnabled), AutoStart.IsEnabled),
@@ -80,17 +92,21 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// Solo interceptamos las teclas si la isla está a la vista para mostrar el cambio;
-    /// oculta (pantalla completa o a mano), Windows vuelve a mostrar su popup.
+    /// Solo reemplazamos el volumen y los avisos de Windows si la isla está a la vista para mostrarlos;
+    /// oculta (pantalla completa o a mano), Windows vuelve a mostrar los suyos.
     /// </summary>
-    private void UpdateVolumeKeys()
+    private void UpdateNativeOverrides()
     {
+        bool visible = _island?.IsVisible == true;
         if (_volumeKeys is not null)
-            _volumeKeys.Enabled = Settings.HideNativeVolume && _island?.IsVisible == true;
+            _volumeKeys.Enabled = Settings.HideNativeVolume && visible;
+        if (_toastHider is not null)
+            _toastHider.Enabled = Settings.HideNativeNotifications && Settings.NotificationsEnabled && visible;
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
+        _toastHider?.Dispose();
         _volumeKeys?.Dispose();
         _tray?.Dispose();
         _singleInstance?.Dispose();

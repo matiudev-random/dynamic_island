@@ -1,4 +1,4 @@
-# Publica la versión optimizada de la isla en una carpeta fija y la abre.
+# Publica la version optimizada de la isla en una carpeta fija y la abre.
 # El inicio con Windows se actualiza solo para apuntar a esta carpeta.
 $ErrorActionPreference = 'Stop'
 
@@ -11,7 +11,7 @@ Start-Sleep -Milliseconds 800
 
 Write-Host "Publicando en $destino ..."
 & dotnet publish $proyecto -c Release -o $destino -nologo -v q
-if ($LASTEXITCODE -ne 0) { throw "Falló la publicación" }
+if ($LASTEXITCODE -ne 0) { throw "Fallo la publicacion" }
 
 Start-Process (Join-Path $destino 'IslaDinamica.exe')
 Write-Host "Listo: la isla quedo instalada y abierta."
