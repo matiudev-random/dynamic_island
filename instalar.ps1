@@ -13,5 +13,6 @@ Write-Host "Publicando en $destino ..."
 & dotnet publish $proyecto -c Release -o $destino -nologo -v q
 if ($LASTEXITCODE -ne 0) { throw "Fallo la publicacion" }
 
-Start-Process (Join-Path $destino 'IslaDinamica.exe')
+# Se abre a traves del Explorador para que no dependa de esta ventana ni de quien ejecuto el script
+Start-Process explorer.exe (Join-Path $destino 'IslaDinamica.exe')
 Write-Host "Listo: la isla quedo instalada y abierta."

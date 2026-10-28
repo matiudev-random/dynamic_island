@@ -22,6 +22,8 @@ public partial class App : Application
         }
 
         base.OnStartup(e);
+        DispatcherUnhandledException += (_, args) => LogCrash(args.Exception);
+        AppDomain.CurrentDomain.UnhandledException += (_, args) => LogCrash(args.ExceptionObject as Exception);
         AutoStart.Initialize();
 
         _island = new MainWindow();
@@ -102,6 +104,21 @@ public partial class App : Application
             _volumeKeys.Enabled = Settings.HideNativeVolume && visible;
         if (_toastHider is not null)
             _toastHider.Enabled = Settings.HideNativeNotifications && Settings.NotificationsEnabled && visible;
+    }
+
+    /// <summary>Si la isla se cae, deja el motivo en %LOCALAPPDATA%\IslaDinamica\error.log para poder revisarlo.</summary>
+    private static void LogCrash(Exception? error)
+    {
+        try
+        {
+            string folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "IslaDinamica");
+            Directory.CreateDirectory(folder);
+            File.AppendAllText(Path.Combine(folder, "error.log"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {error}{Environment.NewLine}{Environment.NewLine}");
+        }
+        catch (Exception)
+        {
+            // Sin disco disponible no hay nada más que hacer
+        }
     }
 
     protected override void OnExit(ExitEventArgs e)
