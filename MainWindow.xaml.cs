@@ -1,3 +1,5 @@
+using Path = System.IO.Path;
+using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -12,10 +14,10 @@ namespace IslaDinamica;
 
 public partial class MainWindow : Window
 {
-    private enum IslandState { Idle, Compact, Expanded, Volume, Notification, Clipboard }
+    private enum IslandState { Idle, Compact, Expanded, Volume, Notification, Clipboard, ClaudeCard }
 
     /// <summary>Páginas de la vista expandida; se cambian con la rueda del mouse.</summary>
-    private enum Page { Music, Agenda, System, Clipboard }
+    private enum Page { Music, Claude, Agenda, System, Clipboard }
 
     private sealed class Bar(ScaleTransform transform, DoubleAnimation animation)
     {
@@ -68,6 +70,10 @@ public partial class MainWindow : Window
     private readonly Queue<NotificationInfo> _pendingNotifications = new();
     private readonly List<ClipItem> _clipHistory = new();
     private readonly Queue<double> _cpuHistory = new(), _ramHistory = new(), _gpuHistory = new();
+    private readonly Dictionary<string, ClaudeSession> _claudeSessions = new();
+    private readonly Queue<ClaudeRequest> _claudeRequests = new();
+    private ClaudeBridge? _claude;
+    private volatile bool _canAskClaude;
     private readonly SolidColorBrush _barBrush = new(Colors.White);
     private readonly List<Bar> _compactBars = new();
     private readonly List<Bar> _expandedBars = new();
@@ -121,6 +127,7 @@ public partial class MainWindow : Window
             _volume.Dispose();
             _notifications.Dispose();
             _calendar.Dispose();
+            _claude?.Dispose();
             _clipboard?.Dispose();
             _monitor?.Dispose();
         };
@@ -185,6 +192,11 @@ public partial class MainWindow : Window
         _calendar.Changed += () => Dispatcher.InvokeAsync(OnCalendarChanged);
         _calendar.Start();
 
+        IsVisibleChanged += (_, _) => _canAskClaude = IsVisible;
+        _canAskClaude = IsVisible;
+        if (Settings.ClaudeEnabled)
+            StartClaude();
+
         _notifications.Received += info => Dispatcher.InvokeAsync(() => OnNotification(info));
         try
         {
@@ -207,7 +219,11 @@ public partial class MainWindow : Window
     private void ReturnToRest()
     {
         _notificationTimer.Stop();
-        if (_pendingNotifications.TryDequeue(out var next))
+        while (_claudeRequests.TryPeek(out var done) && done.IsDone)
+            _claudeRequests.Dequeue();
+        if (_claudeRequests.TryPeek(out var request))
+            ShowClaudeCard(request);
+        else if (_pendingNotifications.TryDequeue(out var next))
             ShowNotification(next);
         else
             GoTo(RestingState());
@@ -218,6 +234,8 @@ public partial class MainWindow : Window
         var pages = new List<Page>(3);
         if (_snapshot.HasSession)
             pages.Add(Page.Music);
+        if (ActiveClaudeSessions().Count > 0)
+            pages.Add(Page.Claude);
         if (_calendar.IsConfigured)
             pages.Add(Page.Agenda);
         pages.Add(Page.System);
@@ -245,6 +263,7 @@ public partial class MainWindow : Window
             IslandState.Expanded => _page switch
             {
                 Page.Music => (MusicView, 400, 162, 28),
+                Page.Claude => (ClaudeView, 400, ClaudePageHeight(), 28),
                 Page.Agenda => (AgendaView, 400, AgendaPageHeight(), 28),
                 Page.System => (SystemView, 400, 138, 28),
                 _ => (ClipboardView, 400, ClipboardPageHeight(), 28),
@@ -252,6 +271,7 @@ public partial class MainWindow : Window
             IslandState.Volume => (VolumeView, 280, 36, 16),
             IslandState.Notification => (NotificationView, 390, 80, 24),
             IslandState.Clipboard => (ClipToastView, 320, 40, 18),
+            IslandState.ClaudeCard => (ClaudeCardView, 400, ClaudeCardHeight(), 24),
             _ => (IdleView, 130, 34, 16),
         };
         Morph(layout.width, layout.height, layout.radius);
@@ -269,6 +289,8 @@ public partial class MainWindow : Window
             RebuildClipboardList();
         if (expanded && _page == Page.Agenda)
             RebuildAgenda();
+        if (expanded && _page == Page.Claude)
+            RebuildClaudeList();
         UpdateVisualizer();
     }
 
@@ -391,7 +413,18 @@ public partial class MainWindow : Window
 
     #region Música
 
-    private void UpdateClock() => IdleView.Text = DateTime.Now.ToString("HH:mm");
+    /// <summary>Hora en reposo; con un punto naranjo si Claude está trabajando (amarillo si te espera).</summary>
+    private void UpdateClock()
+    {
+        IdleView.Inlines.Clear();
+        var sessions = ActiveClaudeSessions();
+        var status = sessions.Any(s => s.Status == ClaudeStatus.Waiting) ? ClaudeStatus.Waiting
+            : sessions.Any(s => s.Status == ClaudeStatus.Working) ? ClaudeStatus.Working
+            : (ClaudeStatus?)null;
+        if (status is { } st)
+            IdleView.Inlines.Add(new System.Windows.Documents.Run("● ") { Foreground = ClaudeStatusBrush(st) });
+        IdleView.Inlines.Add(new System.Windows.Documents.Run(DateTime.Now.ToString("HH:mm")));
+    }
 
     private void OnMediaChanged(MediaSnapshot snapshot)
     {
@@ -495,7 +528,7 @@ public partial class MainWindow : Window
                 GoTo(IslandState.Expanded, force: true); // la altura depende de la cantidad de elementos
             return;
         }
-        if (!IsVisible || _state is IslandState.Notification or IslandState.Volume)
+        if (!IsVisible || _state is IslandState.Notification or IslandState.Volume or IslandState.ClaudeCard)
             return;
 
         bool isImage = item.Thumbnail is not null;
@@ -718,6 +751,369 @@ public partial class MainWindow : Window
 
     #endregion
 
+    #region Claude Code
+
+    private enum ClaudeStatus { Working, Waiting, Done }
+
+    private sealed class ClaudeSession(string name)
+    {
+        public string Name { get; set; } = name;
+        public ClaudeStatus Status { get; set; } = ClaudeStatus.Done;
+        public string Activity { get; set; } = "Lista";
+        public DateTime Updated { get; set; } = DateTime.Now;
+    }
+
+    private const int MaxClaudeRows = 4;
+    private static readonly TimeSpan ClaudeSessionLifetime = TimeSpan.FromHours(2);
+    private static readonly Color ClaudeOrange = Color.FromRgb(0xD9, 0x77, 0x57);
+    private static readonly Brush ClaudeOrangeBrush = new SolidColorBrush(ClaudeOrange);
+    private static readonly Brush ClaudeWaitingBrush = new SolidColorBrush(Color.FromRgb(0xFF, 0xD6, 0x0A));
+    private static readonly Brush ClaudeDoneBrush = new SolidColorBrush(Color.FromRgb(0x30, 0xD1, 0x58));
+    private static readonly Brush DenyGray = new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x3C));
+
+    private static Brush ClaudeStatusBrush(ClaudeStatus status) => status switch
+    {
+        ClaudeStatus.Working => ClaudeOrangeBrush,
+        ClaudeStatus.Waiting => ClaudeWaitingBrush,
+        _ => ClaudeDoneBrush,
+    };
+
+    /// <summary>Activa o desactiva la integración: instala/quita los hooks y abre/cierra el servidor local.</summary>
+    public void SetClaudeEnabled(bool enabled)
+    {
+        Settings.ClaudeEnabled = enabled;
+        if (enabled)
+        {
+            StartClaude();
+            return;
+        }
+
+        _claude?.Dispose();
+        _claude = null;
+        foreach (var request in _claudeRequests)
+            request.Release();
+        _claudeRequests.Clear();
+        _claudeSessions.Clear();
+        try
+        {
+            ClaudeHooks.Uninstall();
+        }
+        catch (Exception)
+        {
+            // settings.json bloqueado o con errores: los hooks fallan solos sin la isla
+        }
+        RefreshClaude();
+        if (_state == IslandState.ClaudeCard)
+            ReturnToRest();
+    }
+
+    private void StartClaude()
+    {
+        if (_claude is not null)
+            return;
+        string token = Settings.ClaudeToken;
+        var bridge = new ClaudeBridge(token) { CanAsk = () => _canAskClaude };
+        bridge.EventReceived += payload => Dispatcher.InvokeAsync(() => OnClaudeEvent(payload));
+        bridge.RequestReceived += request => Dispatcher.InvokeAsync(() => OnClaudeRequest(request));
+        if (!bridge.Start())
+            return; // puerto ocupado: la isla sigue sin Claude
+        _claude = bridge;
+        try
+        {
+            if (!ClaudeHooks.IsInstalled())
+                ClaudeHooks.Install(token);
+        }
+        catch (Exception)
+        {
+            // settings.json con un formato que no entendemos: mejor no tocarlo
+        }
+    }
+
+    private List<ClaudeSession> ActiveClaudeSessions()
+    {
+        foreach (var (id, session) in _claudeSessions.ToList())
+            if (DateTime.Now - session.Updated > ClaudeSessionLifetime)
+                _claudeSessions.Remove(id);
+        return _claudeSessions.Values.OrderByDescending(s => s.Updated).ToList();
+    }
+
+    private ClaudeSession SessionFor(JsonObject payload)
+    {
+        string id = (string?)payload["session_id"] ?? "";
+        string? title = (string?)payload["session_title"];
+        if (!_claudeSessions.TryGetValue(id, out var session))
+        {
+            string cwd = (string?)payload["cwd"] ?? "";
+            string folder = Path.GetFileName(cwd.TrimEnd('\\', '/'));
+            _claudeSessions[id] = session = new ClaudeSession(folder.Length > 0 ? folder : "Claude");
+        }
+        if (!string.IsNullOrWhiteSpace(title))
+            session.Name = title;
+        session.Updated = DateTime.Now;
+        return session;
+    }
+
+    private void OnClaudeEvent(JsonObject payload)
+    {
+        var session = SessionFor(payload);
+        switch ((string?)payload["hook_event_name"])
+        {
+            case "SessionStart":
+                session.Status = ClaudeStatus.Done;
+                session.Activity = "Lista";
+                break;
+            case "SessionEnd":
+                _claudeSessions.Remove((string?)payload["session_id"] ?? "");
+                break;
+            case "UserPromptSubmit":
+                session.Status = ClaudeStatus.Working;
+                session.Activity = "Pensando…";
+                break;
+            case "PreToolUse":
+                session.Status = ClaudeStatus.Working;
+                session.Activity = DescribeTool((string?)payload["tool_name"] ?? "", payload["tool_input"] as JsonObject);
+                break;
+            case "Notification":
+                OnClaudeNotification(session, payload);
+                break;
+            case "Stop":
+                session.Status = ClaudeStatus.Done;
+                session.Activity = "Terminó";
+                EnqueueAlert(ClaudeAlert(session, "Claude terminó", FirstLine((string?)payload["last_assistant_message"])));
+                break;
+        }
+        RefreshClaude();
+    }
+
+    private void OnClaudeNotification(ClaudeSession session, JsonObject payload)
+    {
+        string message = (string?)payload["message"] ?? "";
+        switch ((string?)payload["notification_type"])
+        {
+            case "idle_prompt":
+                // Si ya avisamos que terminó, no repetimos el aviso un minuto después
+                if (session.Status != ClaudeStatus.Done)
+                    EnqueueAlert(ClaudeAlert(session, "Claude te espera", message));
+                session.Status = ClaudeStatus.Waiting;
+                session.Activity = "Esperando tu respuesta";
+                break;
+            case "permission_prompt" or "elicitation_dialog" or "agent_needs_input":
+                session.Status = ClaudeStatus.Waiting;
+                session.Activity = "Te necesita";
+                // Si la tarjeta de la isla ya lo está preguntando, no hace falta otro aviso
+                if (!_claudeRequests.Any(r => !r.IsDone))
+                    EnqueueAlert(ClaudeAlert(session, "Claude te necesita", message));
+                break;
+        }
+    }
+
+    private void OnClaudeRequest(ClaudeRequest request)
+    {
+        var session = SessionFor(request.Payload);
+        if (request.IsQuestion && !TryGetSingleQuestion(request, out _, out _))
+        {
+            // Varias preguntas o selección múltiple: se contestan mejor en Claude
+            request.Release();
+            EnqueueAlert(ClaudeAlert(session, "Claude te hace una pregunta", "Respóndela en Claude"));
+            return;
+        }
+
+        session.Status = ClaudeStatus.Waiting;
+        session.Activity = request.IsQuestion ? "Te hace una pregunta" : "Pide permiso";
+        RefreshClaude();
+
+        _claudeRequests.Enqueue(request);
+        // Si Claude se responde por otro lado (terminal o tiempo agotado), la tarjeta se va sola
+        request.Reply.ContinueWith(_ => Dispatcher.InvokeAsync(() =>
+        {
+            if (_state == IslandState.ClaudeCard && _claudeRequests.TryPeek(out var shown) && shown == request)
+                ReturnToRest();
+        }));
+
+        NotificationSound.Play();
+        if (_state is not (IslandState.ClaudeCard or IslandState.Volume))
+            ReturnToRest();
+    }
+
+    private static bool TryGetSingleQuestion(ClaudeRequest request, out string question, out List<string> options)
+    {
+        question = "";
+        options = [];
+        if (request.Payload["tool_input"]?["questions"] is not JsonArray { Count: 1 } questions ||
+            questions[0] is not JsonObject q || (bool?)q["multiSelect"] == true)
+            return false;
+        question = (string?)q["question"] ?? "";
+        options = (q["options"] as JsonArray ?? [])
+            .Select(o => (string?)o?["label"])
+            .Where(l => !string.IsNullOrWhiteSpace(l))
+            .Select(l => l!)
+            .Take(4)
+            .ToList();
+        return question.Length > 0 && options.Count > 0;
+    }
+
+    private void ShowClaudeCard(ClaudeRequest request)
+    {
+        var session = SessionFor(request.Payload);
+        ClaudeCardHeader.Text = $"Claude · {session.Name}";
+        ClaudeCardButtons.Children.Clear();
+
+        if (request.IsQuestion && TryGetSingleQuestion(request, out string question, out var options))
+        {
+            ClaudeCardTitle.Text = question;
+            ClaudeCardDetailBox.Visibility = Visibility.Collapsed;
+            AddCardButton("En Claude", Brushes.Transparent, () => request.Release());
+            foreach (string option in options)
+                AddCardButton(option, DenyGray, Continue(session, () => request.Answer(question, option)));
+        }
+        else
+        {
+            string tool = (string?)request.Payload["tool_name"] ?? "";
+            var input = request.Payload["tool_input"] as JsonObject;
+            ClaudeCardTitle.Text = PermissionTitle(tool, input);
+            string detail = PermissionDetail(input);
+            ClaudeCardDetail.Text = detail;
+            ClaudeCardDetailBox.Visibility = detail.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+            AddCardButton("En Claude", Brushes.Transparent, () => request.Release());
+            AddCardButton("Denegar", DenyGray, Continue(session, () => request.Decide(allow: false)));
+            AddCardButton("Permitir", ClaudeOrangeBrush, Continue(session, () => request.Decide(allow: true)));
+        }
+
+        GoTo(IslandState.ClaudeCard, force: true);
+    }
+
+    /// <summary>Tras contestar en la isla, Claude sigue trabajando.</summary>
+    private Action Continue(ClaudeSession session, Action answer) => () =>
+    {
+        answer();
+        session.Status = ClaudeStatus.Working;
+        session.Activity = "Continuando…";
+        RefreshClaude();
+    };
+
+    private void AddCardButton(string text, Brush background, Action action)
+    {
+        var button = new Button
+        {
+            Content = text,
+            Style = (Style)FindResource("ChoiceButton"),
+            Background = background,
+            Foreground = background == Brushes.Transparent ? (Brush)FindResource("Dim") : Brushes.White,
+        };
+        button.Click += (_, _) =>
+        {
+            action();
+            ReturnToRest();
+        };
+        ClaudeCardButtons.Children.Add(button);
+    }
+
+    private double ClaudeCardHeight()
+    {
+        ClaudeCardView.Visibility = Visibility.Visible;
+        ClaudeCardView.Measure(new Size(400, double.PositiveInfinity));
+        return Math.Ceiling(ClaudeCardView.DesiredSize.Height);
+    }
+
+    private double ClaudePageHeight() => 66 + 30 * Math.Clamp(ActiveClaudeSessions().Count, 1, MaxClaudeRows);
+
+    private void RefreshClaude()
+    {
+        UpdateClock();
+        if (_state == IslandState.Expanded && (_page == Page.Claude || !AvailablePages().Contains(_page)))
+            GoTo(IslandState.Expanded, force: true);
+    }
+
+    private void RebuildClaudeList()
+    {
+        ClaudeList.Children.Clear();
+        var sessions = ActiveClaudeSessions();
+        int working = sessions.Count(s => s.Status == ClaudeStatus.Working);
+        ClaudeSummary.Text = working > 0 ? $"{working} trabajando" : "";
+
+        var dim = (Brush)FindResource("Dim");
+        foreach (var session in sessions.Take(MaxClaudeRows))
+        {
+            var dot = new Ellipse
+            {
+                Width = 7,
+                Height = 7,
+                Fill = ClaudeStatusBrush(session.Status),
+                Margin = new Thickness(0, 0, 8, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            var activity = new TextBlock
+            {
+                Text = session.Activity,
+                Foreground = dim,
+                FontSize = 11,
+                MaxWidth = 170,
+                Margin = new Thickness(8, 0, 0, 0),
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            var name = new TextBlock
+            {
+                Text = session.Name,
+                Foreground = Brushes.White,
+                FontSize = 12,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            DockPanel.SetDock(dot, Dock.Left);
+            DockPanel.SetDock(activity, Dock.Right);
+            ClaudeList.Children.Add(new DockPanel
+            {
+                Height = 30,
+                Margin = new Thickness(6, 0, 6, 0),
+                Children = { dot, activity, name },
+            });
+        }
+    }
+
+    private static NotificationInfo ClaudeAlert(ClaudeSession session, string title, string body) =>
+        new($"Claude · {session.Name}", title, body, null, Glyph: "", GlyphColor: ClaudeOrange);
+
+    private static string FirstLine(string? text)
+    {
+        string line = (text ?? "").Split('\n').Select(l => l.Trim().TrimStart('#', '*', '-', ' ')).FirstOrDefault(l => l.Length > 0) ?? "";
+        return line.Length > 140 ? line[..140] + "…" : line;
+    }
+
+    private static string FileName(JsonObject? input) =>
+        Path.GetFileName((string?)input?["file_path"] ?? (string?)input?["notebook_path"] ?? "");
+
+    private static string DescribeTool(string tool, JsonObject? input) => tool switch
+    {
+        "Edit" or "MultiEdit" or "Write" or "NotebookEdit" => $"Editando {FileName(input)}",
+        "Read" => $"Leyendo {FileName(input)}",
+        "Bash" or "PowerShell" => "Ejecutando un comando",
+        "Grep" or "Glob" => "Buscando en el código",
+        "WebSearch" or "WebFetch" => "Buscando en internet",
+        "Agent" or "Task" => "Trabajando con un subagente",
+        "AskUserQuestion" => "Te hace una pregunta",
+        _ when tool.StartsWith("mcp__") => $"Usando {tool.Split("__").Last()}",
+        _ => $"Usando {tool}",
+    };
+
+    private static string PermissionTitle(string tool, JsonObject? input) => tool switch
+    {
+        "Bash" or "PowerShell" => "Quiere ejecutar un comando",
+        "Edit" or "MultiEdit" or "Write" or "NotebookEdit" => $"Quiere editar {FileName(input)}",
+        "WebFetch" => "Quiere abrir una página",
+        _ when tool.StartsWith("mcp__") => $"Quiere usar {tool.Split("__").Last()}",
+        _ => $"Quiere usar {tool}",
+    };
+
+    private static string PermissionDetail(JsonObject? input)
+    {
+        string detail = (string?)input?["command"] ?? (string?)input?["file_path"] ?? (string?)input?["url"]
+            ?? input?.ToJsonString() ?? "";
+        return detail.Length > 300 ? detail[..300] + "…" : detail;
+    }
+
+    #endregion
+
     #region Volumen y notificaciones
 
     private void OnVolumeChanged(float level, bool muted)
@@ -754,7 +1150,7 @@ public partial class MainWindow : Window
             _pendingNotifications.Dequeue();
         _pendingNotifications.Enqueue(info);
 
-        if (_state is not (IslandState.Notification or IslandState.Volume))
+        if (_state is not (IslandState.Notification or IslandState.Volume or IslandState.ClaudeCard))
             ReturnToRest();
     }
 
@@ -819,8 +1215,11 @@ public partial class MainWindow : Window
         else
         {
             Hide();
-            // Lo que llegó mientras estaba oculta ya no es relevante
+            // Lo que llegó mientras estaba oculta ya no es relevante; las preguntas vuelven a Claude
             _pendingNotifications.Clear();
+            foreach (var request in _claudeRequests)
+                request.Release();
+            _claudeRequests.Clear();
             if (_state is not (IslandState.Idle or IslandState.Compact))
             {
                 _hovering = false;

@@ -66,6 +66,7 @@ public partial class App : Application
             UpdateNativeOverrides();
         }, Settings.HideNativeVolume),
         new(Settings.CalendarUrls.Length is var n && n > 0 ? $"Calendarios ({n})…" : "Conectar calendarios…", OpenCalendarSetup),
+        new("Claude Code en la isla", () => _island?.SetClaudeEnabled(!Settings.ClaudeEnabled), Settings.ClaudeEnabled),
         new("Iniciar con Windows", () => AutoStart.SetEnabled(!AutoStart.IsEnabled), AutoStart.IsEnabled),
         TrayMenuItem.Separator,
         new("Salir", Shutdown),

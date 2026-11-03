@@ -51,6 +51,29 @@ public static class Settings
         set => WriteBool("NotificationSound", (_notificationSound = value).Value);
     }
 
+    private static bool? _claudeEnabled;
+
+    /// <summary>Mostrar las sesiones de Claude Code en la isla (desactivado hasta que el usuario lo active).</summary>
+    public static bool ClaudeEnabled
+    {
+        get => _claudeEnabled ??= ReadBool("ClaudeCode", false);
+        set => WriteBool("ClaudeCode", (_claudeEnabled = value).Value);
+    }
+
+    /// <summary>Clave que los hooks de Claude Code mandan a la isla; se crea la primera vez.</summary>
+    public static string ClaudeToken
+    {
+        get
+        {
+            using var key = Registry.CurrentUser.CreateSubKey(Key);
+            if (key.GetValue("ClaudeToken") is string token && token.Length >= 32)
+                return token;
+            token = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(24));
+            key.SetValue("ClaudeToken", token);
+            return token;
+        }
+    }
+
     /// <summary>
     /// Enlaces iCal secretos de cada calendario (o rutas a .ics). Vacío = sin calendario.
     /// Migra solo el valor "CalendarUrl" de cuando se admitía un único enlace.
