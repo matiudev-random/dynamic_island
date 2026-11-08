@@ -29,16 +29,20 @@ public static class ClaudeHooks
         ("Stop", null, "event", 5),
     ];
 
-    public static bool IsInstalled()
+    /// <summary>True si faltan los hooks o el status line de la isla (por ejemplo, tras una actualización).</summary>
+    public static bool NeedsInstall()
     {
         try
         {
-            return Load() is { } root && root["hooks"] is JsonObject hooks &&
-                   hooks.Any(e => e.Value is JsonArray groups && groups.Any(IsOurs));
+            if (Load() is not { } root)
+                return true;
+            bool hooks = root["hooks"] is JsonObject list && list.Any(e => e.Value is JsonArray groups && groups.Any(IsOurs));
+            bool statusLine = root["statusLine"] is not null; // el de la isla o uno propio del usuario
+            return !hooks || !statusLine;
         }
         catch (Exception)
         {
-            return false;
+            return false; // archivo que no entendemos: no lo tocamos
         }
     }
 
@@ -67,6 +71,16 @@ public static class ClaudeHooks
                 hooks[name] = list = new JsonArray();
             list.Add(group);
         }
+
+        // El status line es lo único que recibe los límites de uso; si el usuario ya tiene uno, se respeta
+        if (root["statusLine"] is null)
+        {
+            root["statusLine"] = new JsonObject
+            {
+                ["type"] = "command",
+                ["command"] = $"curl.exe -s -m 2 -X POST {ClaudeBridge.BaseUrl}status -H \"{ClaudeBridge.TokenHeader}: {token}\" --data-binary @-",
+            };
+        }
         Save(root);
     }
 
@@ -75,6 +89,8 @@ public static class ClaudeHooks
         if (Load() is not { } root)
             return;
         RemoveOurs(root);
+        if (((string?)root["statusLine"]?["command"])?.Contains(ClaudeBridge.BaseUrl, StringComparison.OrdinalIgnoreCase) == true)
+            root.Remove("statusLine");
         Save(root);
     }
 

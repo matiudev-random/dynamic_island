@@ -5,16 +5,17 @@ Una "isla dinámica" estilo iPhone, pegada al borde superior de la pantalla. Es 
 ## Qué hace
 
 - **Música**: muestra lo que suena (Spotify, YouTube en el navegador, etc.) con la carátula, controles y barra de progreso.
+- **Letras en vivo**: la línea de la canción que suena, sincronizada, en la isla compacta y en la página de música.
 - **Volumen**: al subir o bajar el volumen se ve en la isla en lugar del cuadro de Windows.
 - **Notificaciones**: WhatsApp, Discord, correo… aparecen en la isla con una campanita, y el aviso de Windows de la esquina inferior derecha se esconde para que solo se vean arriba.
 - **Agenda**: los próximos eventos de tus calendarios de Google, con aviso 10 minutos antes.
-- **Claude Code**: ve tus sesiones en vivo (qué está haciendo cada una), recibe un aviso cuando terminan o te esperan, y **permite o deniega permisos** y **responde sus preguntas** desde la isla.
+- **Claude Code**: ve tus sesiones en vivo (qué está haciendo cada una), recibe un aviso cuando terminan o te esperan, **permite o deniega permisos**, **responde sus preguntas** desde la isla y mira cuánto te queda de tus **límites de uso**.
 - **Monitor del sistema**: CPU, RAM y GPU.
 - **Portapapeles**: lo último que copiaste, para volver a copiarlo con un clic.
 - Se esconde sola cuando juegas o ves algo en pantalla completa.
 - Arranca con Windows y tiene un ícono en la bandeja (verde = visible, rojo = oculta).
 
-**Cómo se usa:** pasa el mouse por encima para abrirla y usa la rueda del mouse para cambiar de página (Música → Agenda → Sistema → Portapapeles).
+**Cómo se usa:** pasa el mouse por encima para abrirla y usa la rueda del mouse para cambiar de página (Música → Claude Code → Agenda → Sistema → Portapapeles).
 
 ---
 
@@ -73,6 +74,7 @@ Todo se maneja con **clic derecho sobre el ícono de la isla en la bandeja** (ju
 | Mostrar portapapeles | Activa o desactiva el aviso al copiar algo |
 | Ocultar volumen de Windows | Usa el volumen de la isla en vez del de Windows |
 | Conectar calendarios… | Agrega tus calendarios de Google (ver abajo) |
+| Letras de canciones | Muestra u oculta la letra de la canción que suena |
 | Claude Code en la isla | Conecta la isla con Claude Code (ver abajo) |
 | Iniciar con Windows | Activa o desactiva el arranque automático |
 | Salir | Cierra la isla |
@@ -100,6 +102,7 @@ Qué vas a ver:
 - **Avisos con campanita** cuando una sesión termina o te espera.
 - **Tarjeta de permiso**: cuando Claude quiere ejecutar un comando o editar un archivo, la isla se abre con **Permitir**, **Denegar** o **En Claude** (para contestar allá).
 - **Tarjeta de pregunta**: si Claude te pregunta algo con opciones, puedes elegir la respuesta desde la isla.
+- **Límites de uso** (planes Pro y Max): en la página «Claude Code», cuánto llevas de tu límite de 5 horas y del semanal, y cuándo se reinicia cada uno. Estos datos solo los entrega la *línea de estado* de Claude Code en la terminal, así que la isla también configura una (`statusLine`) que le pasa los datos y muestra «Claude · 5 h 23% · semana 41%». Si ya tenías una línea de estado propia, la isla no la toca y no verás los límites.
 
 Si no contestas en 60 segundos, o si la isla está cerrada u oculta, Claude pregunta como siempre en su propia ventana. Nunca se queda trabado.
 
@@ -114,7 +117,7 @@ Para desconectarlo, desmarca la misma opción: la isla quita sus hooks y deja el
 - **Los enlaces de tus calendarios son secretos.** Quien los tenga puede ver tu calendario, así que no los compartas ni los pegues en el código. La isla los guarda solo en tu PC, en el registro de Windows (`HKEY_CURRENT_USER\Software\IslaDinamica`), nunca en este repositorio.
 - Si alguna vez se filtra un enlace, en Google Calendar usa **Restablecer** junto a la dirección secreta para crear uno nuevo y vuelve a pegarlo en la isla.
 - El historial del portapapeles vive solo en memoria y se borra al cerrar la isla. Tampoco guarda lo que copias desde administradores de contraseñas ni los enlaces secretos de calendario.
-- La isla no envía nada a internet: lo único que descarga son tus calendarios. La conexión con Claude Code es solo local.
+- La isla no envía nada a internet, salvo dos cosas: descarga tus calendarios y, para las letras, le pregunta a [LRCLIB](https://lrclib.net) por la canción que suena (solo el título, el artista y la duración). Si no quieres eso, desactiva **Letras de canciones**. La conexión con Claude Code es solo local.
 
 ---
 
@@ -136,6 +139,7 @@ Para desconectarlo, desmarca la misma opción: la isla quita sus hooks y deja el
 - Archivos principales:
   - `MainWindow.xaml(.cs)`: la isla y sus estados/animaciones.
   - `MediaService.cs`: música (controles multimedia de Windows).
+  - `LyricsService.cs`: letras sincronizadas desde LRCLIB.
   - `VolumeService.cs` y `VolumeKeyHook.cs`: volumen.
   - `NotificationService.cs`: notificaciones.
   - `ToastHider.cs`: esconde el aviso nativo de Windows.

@@ -75,6 +75,9 @@ public sealed class ClaudeBridge : IDisposable
     /// <summary>Evento de una sesión (inicio, prompt, herramienta, aviso, fin). Se dispara desde un hilo de fondo.</summary>
     public event Action<JsonObject>? EventReceived;
 
+    /// <summary>Datos del status line (límites de uso). Se dispara desde un hilo de fondo.</summary>
+    public event Action<JsonObject>? StatusReceived;
+
     /// <summary>Permiso o pregunta que espera respuesta. Se dispara desde un hilo de fondo.</summary>
     public event Action<ClaudeRequest>? RequestReceived;
 
@@ -119,6 +122,7 @@ public sealed class ClaudeBridge : IDisposable
     private async Task HandleAsync(HttpListenerContext context)
     {
         string? reply = null;
+        string contentType = "application/json";
         try
         {
             var request = context.Request;
@@ -143,6 +147,12 @@ public sealed class ClaudeBridge : IDisposable
                 case "/isla/ask":
                     reply = await AskAsync(new ClaudeRequest(isQuestion: true, payload));
                     break;
+                case "/isla/status":
+                    // Lo que se responde es lo que Claude Code muestra en su línea de estado
+                    StatusReceived?.Invoke(payload);
+                    reply = StatusText(payload);
+                    contentType = "text/plain; charset=utf-8";
+                    break;
             }
         }
         catch (Exception)
@@ -156,7 +166,7 @@ public sealed class ClaudeBridge : IDisposable
                 if (reply is not null)
                 {
                     byte[] body = Encoding.UTF8.GetBytes(reply);
-                    context.Response.ContentType = "application/json";
+                    context.Response.ContentType = contentType;
                     await context.Response.OutputStream.WriteAsync(body);
                 }
                 context.Response.Close();
@@ -166,6 +176,17 @@ public sealed class ClaudeBridge : IDisposable
                 // Claude ya cortó la conexión (p. ej. el usuario respondió en la terminal)
             }
         }
+    }
+
+    /// <summary>Texto corto para la línea de estado de la terminal: "5 h 23% · semana 41%".</summary>
+    private static string StatusText(JsonObject payload)
+    {
+        var parts = new List<string>();
+        if ((double?)payload["rate_limits"]?["five_hour"]?["used_percentage"] is { } fiveHour)
+            parts.Add($"5 h {fiveHour:0}%");
+        if ((double?)payload["rate_limits"]?["seven_day"]?["used_percentage"] is { } week)
+            parts.Add($"semana {week:0}%");
+        return parts.Count > 0 ? "Claude · " + string.Join(" · ", parts) : "";
     }
 
     private async Task<string?> AskAsync(ClaudeRequest request)

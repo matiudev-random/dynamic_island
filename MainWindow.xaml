@@ -143,12 +143,16 @@
                 </Border>
                 <StackPanel x:Name="CompactBars" Orientation="Horizontal" Margin="0,0,16,0"
                             HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                <!-- Letra de la canción (si la hay, la isla compacta se ensancha) -->
+                <TextBlock x:Name="CompactLyric" Foreground="White" FontSize="12" Margin="46,0,52,0"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
             </Grid>
 
             <!-- Página expandida: música -->
             <Grid x:Name="MusicView" Width="348" Margin="0,16,0,0" VerticalAlignment="Top"
                   Visibility="Collapsed" Opacity="0">
                 <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
@@ -177,7 +181,11 @@
                                 VerticalAlignment="Center" Margin="0,0,4,0"/>
                 </Grid>
 
-                <Grid Grid.Row="1" Margin="0,12,0,0">
+                <TextBlock x:Name="MusicLyric" Grid.Row="1" Foreground="White" FontSize="13" FontWeight="SemiBold"
+                           HorizontalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="0,12,0,0"
+                           Visibility="Collapsed"/>
+
+                <Grid Grid.Row="2" Margin="0,12,0,0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="36"/>
                         <ColumnDefinition/>
@@ -198,7 +206,7 @@
                                VerticalAlignment="Center" TextAlignment="Right"/>
                 </Grid>
 
-                <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,4,0,0">
+                <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,4,0,0">
                     <Button Style="{StaticResource IconButton}" Content="&#xE892;" Click="Previous_Click"/>
                     <Button x:Name="PlayPauseButton" Style="{StaticResource IconButton}" FontSize="20"
                             Content="&#xE768;" Click="PlayPause_Click"/>
@@ -267,6 +275,7 @@
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
                 <Grid Height="20">
                     <TextBlock Text="Claude Code" Style="{StaticResource MetricLabel}" VerticalAlignment="Center"
@@ -275,6 +284,33 @@
                                HorizontalAlignment="Right" Margin="0,0,4,0"/>
                 </Grid>
                 <StackPanel x:Name="ClaudeList" Grid.Row="1" Margin="0,6,0,0"/>
+                <!-- Límites de uso de la suscripción (llegan con el status line de Claude Code) -->
+                <UniformGrid x:Name="ClaudeLimits" Grid.Row="2" Columns="2" Margin="6,6,6,0" Visibility="Collapsed">
+                    <StackPanel Margin="0,0,10,0">
+                        <DockPanel>
+                            <TextBlock x:Name="LimitFiveText" DockPanel.Dock="Right" Style="{StaticResource MetricLabel}"/>
+                            <TextBlock Text="5 horas" Style="{StaticResource MetricLabel}"/>
+                        </DockPanel>
+                        <Grid Height="4" Margin="0,4,0,0">
+                            <Border CornerRadius="2" Background="{StaticResource Track}"/>
+                            <Border x:Name="LimitFiveBar" CornerRadius="2" Background="#D97757" RenderTransformOrigin="0,0.5">
+                                <Border.RenderTransform><ScaleTransform x:Name="LimitFiveScale" ScaleX="0"/></Border.RenderTransform>
+                            </Border>
+                        </Grid>
+                    </StackPanel>
+                    <StackPanel Margin="10,0,0,0">
+                        <DockPanel>
+                            <TextBlock x:Name="LimitWeekText" DockPanel.Dock="Right" Style="{StaticResource MetricLabel}"/>
+                            <TextBlock Text="Semana" Style="{StaticResource MetricLabel}"/>
+                        </DockPanel>
+                        <Grid Height="4" Margin="0,4,0,0">
+                            <Border CornerRadius="2" Background="{StaticResource Track}"/>
+                            <Border x:Name="LimitWeekBar" CornerRadius="2" Background="#D97757" RenderTransformOrigin="0,0.5">
+                                <Border.RenderTransform><ScaleTransform x:Name="LimitWeekScale" ScaleX="0"/></Border.RenderTransform>
+                            </Border>
+                        </Grid>
+                    </StackPanel>
+                </UniformGrid>
             </Grid>
 
             <!-- Tarjeta de Claude: pide permiso o hace una pregunta -->

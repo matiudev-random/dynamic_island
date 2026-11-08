@@ -51,6 +51,15 @@ public static class Settings
         set => WriteBool("NotificationSound", (_notificationSound = value).Value);
     }
 
+    private static bool? _lyricsEnabled;
+
+    /// <summary>Mostrar la letra de la canción que suena (activado por defecto).</summary>
+    public static bool LyricsEnabled
+    {
+        get => _lyricsEnabled ??= ReadBool("Lyrics", true);
+        set => WriteBool("Lyrics", (_lyricsEnabled = value).Value);
+    }
+
     private static bool? _claudeEnabled;
 
     /// <summary>Mostrar las sesiones de Claude Code en la isla (desactivado hasta que el usuario lo active).</summary>

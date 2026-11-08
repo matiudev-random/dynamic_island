@@ -60,6 +60,9 @@ public partial class MainWindow : Window
     private static readonly Brush RowHover = new SolidColorBrush(Color.FromArgb(0x1A, 0xFF, 0xFF, 0xFF));
 
     private readonly MediaService _media = new();
+    private readonly LyricsService _lyrics = new();
+    private IReadOnlyList<LyricLine>? _lyricLines;
+    private string _lyricTrack = "";
     private readonly VolumeService _volume = new();
     private readonly NotificationService _notifications = new();
     private readonly CalendarService _calendar = new();
@@ -88,6 +91,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _fullscreenTimer;
     private readonly DispatcherTimer _trimTimer;
     private readonly DispatcherTimer _calendarTimer;
+    private readonly DispatcherTimer _lyricsTimer;
 
     private IslandState _state = IslandState.Idle;
     private Page _page = Page.System;
@@ -114,6 +118,7 @@ public partial class MainWindow : Window
         _fullscreenTimer = CreateTimer(2000, CheckFullscreen);
         _trimTimer = CreateTimer(30000, TrimMemory);
         _calendarTimer = CreateTimer(20000, OnCalendarTick);
+        _lyricsTimer = CreateTimer(200, UpdateLyric);
 
         UpdateClock();
         _clockTimer.Start();
@@ -234,7 +239,7 @@ public partial class MainWindow : Window
         var pages = new List<Page>(3);
         if (_snapshot.HasSession)
             pages.Add(Page.Music);
-        if (ActiveClaudeSessions().Count > 0)
+        if (ActiveClaudeSessions().Count > 0 || HasClaudeLimits)
             pages.Add(Page.Claude);
         if (_calendar.IsConfigured)
             pages.Add(Page.Agenda);
@@ -259,10 +264,10 @@ public partial class MainWindow : Window
 
         (FrameworkElement view, double width, double height, double radius) layout = state switch
         {
-            IslandState.Compact => (CompactView, 250, 36, 16),
+            IslandState.Compact => (CompactView, HasLyrics ? 380 : 250, 36, 16),
             IslandState.Expanded => _page switch
             {
-                Page.Music => (MusicView, 400, 162, 28),
+                Page.Music => (MusicView, 400, HasLyrics ? 192 : 162, 28),
                 Page.Claude => (ClaudeView, 400, ClaudePageHeight(), 28),
                 Page.Agenda => (AgendaView, 400, AgendaPageHeight(), 28),
                 Page.System => (SystemView, 400, 138, 28),
@@ -274,6 +279,8 @@ public partial class MainWindow : Window
             IslandState.ClaudeCard => (ClaudeCardView, 400, ClaudeCardHeight(), 24),
             _ => (IdleView, 130, 34, 16),
         };
+        CompactView.Width = HasLyrics ? 380 : 250;
+        MusicLyric.Visibility = HasLyrics ? Visibility.Visible : Visibility.Collapsed;
         Morph(layout.width, layout.height, layout.radius);
         ShowOnly(layout.view);
         UpdatePageDots(state == IslandState.Expanded ? pages : null);
@@ -394,6 +401,12 @@ public partial class MainWindow : Window
         bool playing = _snapshot.IsPlaying && IsVisible;
         SetBars(_compactBars, playing && _state == IslandState.Compact);
         SetBars(_expandedBars, playing && _state == IslandState.Expanded && _page == Page.Music);
+
+        // La letra solo se sigue mientras suena y se ve
+        bool lyricVisible = _state == IslandState.Compact || (_state == IslandState.Expanded && _page == Page.Music);
+        _lyricsTimer.IsEnabled = playing && HasLyrics && lyricVisible;
+        if (_lyricsTimer.IsEnabled)
+            UpdateLyric();
     }
 
     private static void SetBars(List<Bar> bars, bool run)
@@ -438,6 +451,7 @@ public partial class MainWindow : Window
         _barBrush.Color = snapshot.Art is null ? Colors.White : snapshot.Accent;
         PlayPauseButton.Content = snapshot.IsPlaying ? "" : "";
 
+        LoadLyricsFor(snapshot);
         if (_state == IslandState.Expanded && hadSession != snapshot.HasSession)
             GoTo(IslandState.Expanded, force: true); // apareció o desapareció la página de música
         else if (_state is IslandState.Idle or IslandState.Compact)
@@ -464,6 +478,64 @@ public partial class MainWindow : Window
 
     private static string Format(TimeSpan t) =>
         t.TotalHours >= 1 ? t.ToString(@"h\:mm\:ss") : $"{(int)t.TotalMinutes}:{t.Seconds:00}";
+
+    private bool HasLyrics => Settings.LyricsEnabled && _lyricLines is not null;
+
+    /// <summary>Al cambiar de canción busca su letra sincronizada (una vez por canción).</summary>
+    private async void LoadLyricsFor(MediaSnapshot snapshot)
+    {
+        string track = snapshot.HasSession ? $"{snapshot.Artist}\n{snapshot.Title}" : "";
+        if (track == _lyricTrack)
+            return;
+        _lyricTrack = track;
+        bool had = HasLyrics;
+        _lyricLines = null;
+        CompactLyric.Text = MusicLyric.Text = "";
+        if (had)
+            RelayoutMusic();
+
+        if (!Settings.LyricsEnabled || track.Length == 0 || snapshot.Title.Length == 0)
+            return;
+        var lines = await _lyrics.GetAsync(snapshot.Title, snapshot.Artist, snapshot.Duration);
+        if (track != _lyricTrack || lines is null)
+            return; // ya cambió la canción mientras se buscaba
+        _lyricLines = lines;
+        RelayoutMusic();
+    }
+
+    /// <summary>Activa o desactiva las letras desde la bandeja.</summary>
+    public void SetLyricsEnabled(bool enabled)
+    {
+        Settings.LyricsEnabled = enabled;
+        _lyricTrack = ""; // fuerza a buscarla de nuevo
+        _lyricLines = null;
+        LoadLyricsFor(_snapshot);
+        RelayoutMusic();
+    }
+
+    /// <summary>La isla compacta y la página de música cambian de tamaño según haya letra.</summary>
+    private void RelayoutMusic()
+    {
+        if (_state == IslandState.Compact || (_state == IslandState.Expanded && _page == Page.Music))
+            GoTo(_state, force: true);
+        else
+            UpdateVisualizer();
+    }
+
+    private void UpdateLyric()
+    {
+        if (_lyricLines is null)
+            return;
+        string line = LyricsService.LineAt(_lyricLines, _snapshot.EstimatedPosition);
+        if (line.Length == 0)
+            line = "♪";
+        if (line == CompactLyric.Text)
+            return;
+        CompactLyric.Text = MusicLyric.Text = line;
+        var fade = new DoubleAnimation(0.2, 1, TimeSpan.FromMilliseconds(220));
+        CompactLyric.BeginAnimation(OpacityProperty, fade);
+        MusicLyric.BeginAnimation(OpacityProperty, fade);
+    }
 
     #endregion
 
@@ -815,18 +887,69 @@ public partial class MainWindow : Window
         var bridge = new ClaudeBridge(token) { CanAsk = () => _canAskClaude };
         bridge.EventReceived += payload => Dispatcher.InvokeAsync(() => OnClaudeEvent(payload));
         bridge.RequestReceived += request => Dispatcher.InvokeAsync(() => OnClaudeRequest(request));
+        bridge.StatusReceived += payload => Dispatcher.InvokeAsync(() => OnClaudeStatus(payload));
         if (!bridge.Start())
             return; // puerto ocupado: la isla sigue sin Claude
         _claude = bridge;
         try
         {
-            if (!ClaudeHooks.IsInstalled())
+            if (ClaudeHooks.NeedsInstall())
                 ClaudeHooks.Install(token);
         }
         catch (Exception)
         {
             // settings.json con un formato que no entendemos: mejor no tocarlo
         }
+    }
+
+    /// <summary>Uso de la suscripción: porcentaje y cuándo se reinicia cada ventana.</summary>
+    private sealed record ClaudeLimit(double Percent, DateTimeOffset ResetsAt);
+
+    private ClaudeLimit? _limitFiveHour, _limitWeek;
+
+    private void OnClaudeStatus(JsonObject payload)
+    {
+        var limits = payload["rate_limits"];
+        _limitFiveHour = ReadLimit(limits?["five_hour"]) ?? _limitFiveHour;
+        _limitWeek = ReadLimit(limits?["seven_day"]) ?? _limitWeek;
+        if (_state == IslandState.Expanded && _page == Page.Claude)
+            UpdateClaudeLimits();
+    }
+
+    private static ClaudeLimit? ReadLimit(JsonNode? window) =>
+        (double?)window?["used_percentage"] is { } percent && (long?)window?["resets_at"] is { } resets
+            ? new ClaudeLimit(percent, DateTimeOffset.FromUnixTimeSeconds(resets))
+            : null;
+
+    /// <summary>Una ventana ya reiniciada vuelve a cero hasta que llegue el dato nuevo.</summary>
+    private static ClaudeLimit? Current(ClaudeLimit? limit) =>
+        limit is null ? null : limit.ResetsAt <= DateTimeOffset.Now ? limit with { Percent = 0 } : limit;
+
+    private bool HasClaudeLimits => _limitFiveHour is not null || _limitWeek is not null;
+
+    private void UpdateClaudeLimits()
+    {
+        ClaudeLimits.Visibility = HasClaudeLimits ? Visibility.Visible : Visibility.Collapsed;
+        ShowLimit(Current(_limitFiveHour), LimitFiveText, LimitFiveScale, LimitFiveBar, "HH:mm");
+        ShowLimit(Current(_limitWeek), LimitWeekText, LimitWeekScale, LimitWeekBar, "ddd HH:mm");
+    }
+
+    private static void ShowLimit(ClaudeLimit? limit, TextBlock text, ScaleTransform scale, Border bar, string resetFormat)
+    {
+        if (limit is null)
+        {
+            text.Text = "—";
+            scale.ScaleX = 0;
+            return;
+        }
+        text.Text = limit.Percent > 0
+            ? $"{limit.Percent:0}% · {limit.ResetsAt.LocalDateTime.ToString(resetFormat)}"
+            : "0%";
+        bar.ToolTip = $"Se reinicia: {limit.ResetsAt.LocalDateTime:dddd d 'de' MMMM, HH:mm}";
+        scale.BeginAnimation(ScaleTransform.ScaleXProperty,
+            new DoubleAnimation(Math.Clamp(limit.Percent / 100, 0, 1), TimeSpan.FromMilliseconds(300)));
+        // Rojo cuando ya queda poco
+        ((Border)bar).Background = limit.Percent >= 90 ? new SolidColorBrush(Color.FromRgb(0xFF, 0x45, 0x3A)) : ClaudeOrangeBrush;
     }
 
     private List<ClaudeSession> ActiveClaudeSessions()
@@ -1015,7 +1138,8 @@ public partial class MainWindow : Window
         return Math.Ceiling(ClaudeCardView.DesiredSize.Height);
     }
 
-    private double ClaudePageHeight() => 66 + 30 * Math.Clamp(ActiveClaudeSessions().Count, 1, MaxClaudeRows);
+    private double ClaudePageHeight() =>
+        66 + 30 * Math.Clamp(ActiveClaudeSessions().Count, 1, MaxClaudeRows) + (HasClaudeLimits ? 34 : 0);
 
     private void RefreshClaude()
     {
@@ -1026,6 +1150,7 @@ public partial class MainWindow : Window
 
     private void RebuildClaudeList()
     {
+        UpdateClaudeLimits();
         ClaudeList.Children.Clear();
         var sessions = ActiveClaudeSessions();
         int working = sessions.Count(s => s.Status == ClaudeStatus.Working);
